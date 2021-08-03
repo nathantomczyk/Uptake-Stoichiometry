@@ -1,0 +1,638 @@
+---
+title: "SNAX III uptake"
+output: pdf_document
+---
+# SNAX III nutrient uptake
+
+This code is used to estimate nutrient uptake in the experimental streams. We use bootstrapping to account for uncertaintiy in the conservative concentration of nutreints in each stream and a mass balance approach to estimate the rate of nutrient uptake in the streams. 
+
+Analysis was with R version 3.6.2 (2019-12-12)
+
+
+```{r echo=FALSE}
+#### load packages
+rm(mean)
+library(ggplot2)
+library(bbmle)
+library(Rmisc)
+library(reshape2)
+library(dplyr)
+library(ggridges)
+
+set.seed(207)
+### load data
+setwd("C:\\Users\\nt78066\\OneDrive - University of Georgia\\Documents\\SNAX_3_nutrient_uptake\\")
+###
+pump.info<-read.csv("all.noon.pump.information_clean.csv" ) # processed in camble.data.logger.info.noon.R and
+barrel.conc<-read.csv("conc_nutrient_in_barrels_every_day_clean.csv") #processed in nutrient_conc_in_barrels.R
+all.nuts<-read.csv("all_snax_nutrients_clean.csv")
+drip<-read.csv("drip_rate_measurementes.csv")
+zero.m.nuts<-read.csv("nutrients_above_0m_clean.csv")
+width<-read.csv("snax3_wetted_widths.csv" )
+
+
+######### formatting dates
+zero.m.nuts$date<-as.Date(strptime(zero.m.nuts$date,format=("%Y-%m-%d")))
+pump.info$date<-as.Date(strptime(pump.info$date.time,format=("%Y-%m-%d")))
+barrel.conc$date<-as.Date(strptime(barrel.conc$date,format=("%Y-%m-%d")))
+all.nuts$Date<-as.Date(strptime(all.nuts$Date,format=("%Y-%m-%d")))
+drip$date<-as.Date(strptime(drip$date,format=("%Y-%m-%d")))
+width$date<-as.Date(strptime(width$date,format=("%Y-%m-%d")))
+
+```
+
+Getting background nutrient data sortted correctly.
+```{r}
+zero.m.nuts2<-data.frame(date=zero.m.nuts$date,stream=zero.m.nuts$stream,background.DIN=zero.m.nuts$DIN..µg.L.,background.P=zero.m.nuts$SRP..µg.L.)
+
+names(all.nuts)[names(all.nuts) == "Date"] <- "date"
+names(all.nuts)[names(all.nuts) == "Stream"] <- "stream"
+
+
+all.nuts<-merge(all.nuts,zero.m.nuts2,by=c("date","stream"))
+
+all.nuts<-all.nuts[all.nuts$Meter==70,]
+```
+
+# Uncertaintiy
+
+If there is no uptake then the nutrient concentraiton at a given point in the stream is a combination of the background nutrients and the nutrients which were added to the stream from the pump system.There are some sources of uncertainity in how this should look.
+
+1.) The volume of nutrient solution moved per turn of the pumpare somewhat variable and not always known
+2.) There is some uncertainity in the flow data (stage discharge relationship)
+3.) There is some uncertainity in the relationship between discharge and stream width
+
+
+
+## Functions
+
+Functions to estimate stage-discharge relationships, discharge-width relationships, and conservative concentrations of DIN and SRP
+
+```{r}
+# The quality of the rating curves varies across the stream, by sampling from the curves (with replacement) and recalculating the relationships it will add more uncertaintiy to the estimates from the streams where we are less certain about the flow stage relationships.
+
+setwd("C:\\Users\\nt78066\\OneDrive - University of Georgia\\Documents\\SNAX_3_nutrient_uptake\\")
+pump.info$corrected_discharge<-NA
+
+
+slug<-read.csv("all.salt.slugs.csv")
+slug$date<-as.Date(strptime(slug$Date,format=("%Y-%m-%d")))
+colnames(slug)[colnames(slug)=="Measured.Q..L.s.1."] <- "discharge"
+
+# this function takes the stream identify, subsets the data for that stream, fits a power law model to a subset of the data then predicts the data on each day where stage measurements exist
+recalculate_discharge<-function(stream_id){
+  c2<-slug[slug$Stream==paste(stream_id),]
+  flow.mod2<-lm(log(discharge)~log(Stage.meters),data=c2[sample(nrow(c2), nrow(c2),replace=TRUE), ])
+  
+  
+  corrected.flow<-exp(coef(flow.mod2)[2]*log(pump.info[pump.info$stream==paste(stream_id),"WaterDep"])+coef(flow.mod2)[1])
+  return(data.frame(corrected.flow))
+  
+  
+}
+
+######### WS 7 stage data has some issues, using correlations between slugs to convert
+
+slug2<-melt(slug,measure.vars = "discharge",id.vars=c("Date","Stream"))
+
+slug3<-dcast(Date~variable+Stream,data=slug2,mean)
+
+## stream 9 has a record that looks good, going to estiamte stream 7 flow based ona regression
+
+stream_7_model<-lm(discharge_WS07~discharge_WS09+discharge_WS06,data=slug3)
+
+
+discharge1<-ggplot(slug3,aes(y=discharge_WS07,x=discharge_WS09))+theme_classic()+geom_smooth(method="lm",se=FALSE,size=3)+xlab("Discharge (L/s, stream N:P=2)")+ylab("Discharge (L/s, stream N:P=128)")+geom_point(size=3)+theme(text = element_text(size=20))
+
+discharge2<-ggplot(slug3,aes(y=discharge_WS07,x=discharge_WS06))+theme_classic()+geom_smooth(method="lm",se=FALSE,size=3)+xlab("Discharge (L/s, stream N:P=32)")+ylab("Discharge (L/s, stream N:P=128)")+geom_point(size=3)+theme(text = element_text(size=20))
+
+tiff(filename="discharge_correction.tiff",units="in",res=800,width=6,height=10,compression="lzw")
+multiplot(discharge1,discharge2)
+dev.off()
+
+
+recalculate_discharge_stream7<-function(){
+  
+  
+
+  
+  WS6<-data.frame(date=e$date,discharge_WS06=e$corrected.flow)
+  WS09<-data.frame(date=b$date,discharge_WS09=b$corrected.flow)
+  
+  temp<-merge(WS6,WS09,by="date")
+  
+  corrected.flow<-coef(stream_7_model)[1]+temp$discharge_WS09*coef(stream_7_model)[2]+temp$discharge_WS06*coef(stream_7_model)[3]
+  
+
+  
+  
+  output<-data.frame(date=temp$date,corrected.flow)
+  
+  return(output)
+  
+  
+}
+
+
+# Similarly need to incorperate variation in the relationship between flow and width. 
+
+width.model<-function(stream_id){
+  sub.w<-width2[width2$stream==stream_id,]
+  width.mod2<-lm(log(wetted.width.m)~log(corrected.flow),data=sub.w[sample(nrow(sub.w), nrow(sub.w),replace=TRUE), ])
+  
+  exp(coef(width.mod2)[1])*pump.info2[pump.info2$stream==paste(stream_id),"corrected.flow"]**coef(width.mod2)[2]
+  
+  }
+
+conservative_concentration_DIN<-function(stream_id){
+  # this calculate the theoretical concentraiton of DIN as the background concentration plus the input rate times the portion of inputs that happened upstream of the sample site
+  all.data[all.data$stream==paste(stream_id),"background.DIN"]+all.data[all.data$stream==paste(stream_id),"input.rate.din"]
+}
+
+conservative_concentration_SRP<-function(stream_id){
+  # this calculate the theoretical concentraiton of SRP as the background concentration plus the input rate times the portion of inputs that happened upstream of the sample site
+  all.data[all.data$stream==paste(stream_id),"background.P"]+all.data[all.data$stream==paste(stream_id),"input.rate.srp"]
+  }
+
+
+
+```
+
+# Calculating theoretical - no uptake - concentrations of nutrients
+
+```{r,echo=FALSE}
+inputs1<-merge(barrel.conc,drip,by=c("stream","date"),all.x=TRUE)
+
+compiled_data<-data.frame()
+pump.info$stream.width<-NA
+
+#### Looping through 1000 iterations in each stream
+for (i in 1:1000){
+
+  #select random value of stroke rate when there isn't one on the day of measurement 
+for (m in 1:nrow(inputs1)){if(is.na(inputs1$flow.rate.ml.stroke[m])==TRUE){
+  stream.meas<-drip[drip$stream==inputs1$stream[m],]
+  inputs1$flow.rate.ml.stroke[m]<-base::sample(stream.meas$flow.rate.ml.stroke,1)
+  
+}}
+
+
+a<-cbind(pump.info[pump.info$stream=="WS10",],recalculate_discharge("WS10"))
+b<-cbind(pump.info[pump.info$stream=="WS09",],recalculate_discharge("WS09"))
+c<-cbind(pump.info[pump.info$stream=="WS08",],recalculate_discharge("WS08"))
+e<-cbind(pump.info[pump.info$stream=="WS06",],recalculate_discharge("WS06"))
+d<-merge(pump.info[pump.info$stream=="WS07",],recalculate_discharge_stream7(),by="date")
+
+pump.info2<-bind_rows(a,b,c,d,e)
+
+width2<-merge(width,pump.info2,by=c("stream","date"))
+
+pump.info2[pump.info2$stream=="WS10","stream.width"]<-width.model("WS10")
+pump.info2[pump.info2$stream=="WS09","stream.width"]<-width.model("WS09")
+pump.info2[pump.info2$stream=="WS08","stream.width"]<-width.model("WS08")
+pump.info2[pump.info2$stream=="WS07","stream.width"]<-width.model("WS07")
+pump.info2[pump.info2$stream=="WS06","stream.width"]<-width.model("WS06")
+
+#check
+#ggplot(pump.info,aes(x=corrected.flow,y=stream.width,color=stream))+geom_point()
+
+inputs2<-merge(inputs1,pump.info2,by=c("stream","date"))
+
+
+
+inputs2$input.rate.srp<-(((inputs2$number.of.strokes*inputs2$flow.rate.ml.stroke)/(15*60))*
+                           (inputs2$conc.srp.in.barrel*1000))/inputs2$corrected.flow
+# 1000 is a unit conversion for the concentrations
+# dividing by 15*60 converts the number of strokes from the number per 15 mins to the number per S
+
+inputs2$input.rate.din<-((inputs2$number.of.strokes*inputs2$flow.rate.ml.stroke)/(15*60)*
+                           (inputs2$conc.DIN.in.barrel*1000))/inputs2$corrected.flow
+
+## input rate of SRP and DIN are in the units of ug N or P/ L water
+
+all.data<-merge(all.nuts,inputs2,by=c("stream","date"))
+
+
+
+all.data$conservative_DIN<-NA
+all.data$conservative_SRP<-NA
+
+# WS 06
+all.data[all.data$stream=="WS06","conservative_DIN"]<-conservative_concentration_DIN("WS06")
+all.data[all.data$stream=="WS06","conservative_SRP"]<-conservative_concentration_SRP("WS06")
+
+# WS 07
+all.data[all.data$stream=="WS07","conservative_DIN"]<-conservative_concentration_DIN("WS07")
+all.data[all.data$stream=="WS07","conservative_SRP"]<-conservative_concentration_SRP("WS07")
+
+# WS 08
+all.data[all.data$stream=="WS08","conservative_DIN"]<-conservative_concentration_DIN("WS08")
+all.data[all.data$stream=="WS08","conservative_SRP"]<-conservative_concentration_SRP("WS08")
+
+# WS 09
+all.data[all.data$stream=="WS09","conservative_DIN"]<-conservative_concentration_DIN("WS09")
+all.data[all.data$stream=="WS09","conservative_SRP"]<-conservative_concentration_SRP("WS09")
+
+# WS 10
+all.data[all.data$stream=="WS10","conservative_DIN"]<-conservative_concentration_DIN("WS10")
+all.data[all.data$stream=="WS10","conservative_SRP"]<-conservative_concentration_SRP("WS10")
+all.data$interation<-i
+
+compiled_data<-rbind(compiled_data,all.data)
+
+
+
+}
+
+```
+NaNs warning occurs when there is no measured background concentration of nutrients - these should not be removed because there are cases where there is a measuremnt for N and not P or vis versa 
+
+
+
+#Estimateing uptake rates
+
+```{r}
+compiled_data$p.uptake.ug.m2.sec<-(compiled_data$conservative_SRP-compiled_data$PO4.P)*(compiled_data$corrected.flow)/(compiled_data$stream.width*compiled_data$Meter)
+
+compiled_data$n.uptake.ug.m2.sec<-(compiled_data$conservative_DIN-compiled_data$DIN)*(compiled_data$corrected.flow)/(compiled_data$stream.width*compiled_data$Meter)
+
+
+```
+
+### Figure 1
+One example plot from a stream
+
+```{r}
+ex<-compiled_data[compiled_data$NP==16 & compiled_data$date=="2012-07-01" & compiled_data$Meter==70,]
+
+quantile(ex$conservative_SRP,probs=c(0.025,0.975),na.rm=TRUE)
+
+cbbPalette <- c( "#E69F00", "#56B4E9", "#009E73")
+
+
+example_plot<-ggplot(ex,aes(conservative_SRP))+xlab(expression("Nutrient Concentration ("*mu*g~L^-1*")"))+ scale_y_continuous(limits = c(0,0.035), expand = c(0, 0))+theme_classic()+ylab("Likelihood of conservative concentration")+scale_x_continuous(limits = c(30,125), expand = c(0, 1))+annotate("rect", xmin = 30, xmax = 51, ymin = 0, ymax = 0.035,alpha = 0.5,fill="#56B4E9")+annotate("rect", xmin = 51, xmax = 103.4, ymin = 0, ymax = 0.035,alpha = 0.5,fill="#E69F00")+annotate("rect", xmin = 103.4, xmax = 125, ymin = 0, ymax = 0.035,alpha = 0.5,fill="#009E73")+geom_density(size=2)+theme(text = element_text(size=15))+annotate("text",x=39,y=0.01,label="Net Uptake",size=6)+annotate("text",x=72,y=0.01,label="Balanced/ No Uptake",size=6)+annotate("text",x=115,y=0.01,label="Net Release",size=6)+ geom_segment(aes(x = 103.5, y = 0.008, xend = 124, yend = 0.008), arrow = arrow(length = unit(0.5, "cm")),size=2)+geom_segment(aes(x = 51, y = 0.008, xend = 30, yend = 0.008), arrow = arrow(length = unit(0.5, "cm")),size=2)+geom_segment(aes(x = 103, y = 0.008, xend = 51, yend = 0.008),size=2,linetype="longdash")+geom_segment(aes(x = 51, y = 0.006, xend = 51, yend = 0.01), size=2)+geom_segment(aes(x = 103.4, y = 0.006, xend = 103.4, yend = 0.01), size=2)
+
+tiff(filename="example_of_conservative_conc.tiff",units="in",res=800,width=7,height=7,compression="lzw")
+example_plot
+dev.off()
+```
+
+
+
+#Is there net uptake on average? (data in table A2)
+
+```{r}
+### appendix table values come from here
+
+compiled_data$n.uptake.uM.m2.sec<-compiled_data$n.uptake.ug.m2.sec/14 #convert to molar
+
+N.first<-aggregate( n.uptake.uM.m2.sec~ NP+date,data=compiled_data[compiled_data$Meter==70,], 
+          FUN = median )
+
+
+summarySE(N.first,measurevar = "n.uptake.uM.m2.sec",groupvars="NP") #data for table A2
+
+
+compiled_data$p.uptake.uM.m2.sec<-compiled_data$p.uptake.ug.m2.sec/31
+
+P.first<-aggregate( p.uptake.uM.m2.sec~ NP+date,data=compiled_data[compiled_data$Meter==70,], 
+          FUN = median )
+summarySE(P.first,measurevar="p.uptake.uM.m2.sec",groupvars="NP")
+
+P.quants<-aggregate( p.uptake.uM.m2.sec~ NP,data=P.first, 
+          FUN = 'quantile', probs=c(2.5, 50, 97.5)/100 )
+
+N.quants<-aggregate( n.uptake.uM.m2.sec~ NP,data=N.first, 
+          FUN = 'quantile', probs=c(2.5, 50, 97.5)/100 )
+
+```
+
+#Figure 2
+distribution of uptake rates
+```{r}
+N.quants<-aggregate( n.uptake.ug.m2.sec~ NP+date,data=compiled_data[compiled_data$Meter==70,], 
+          FUN = 'quantile', probs=c(2.5, 50, 97.5)/100 )
+
+N.quants$n.status<-"balanced"
+N.quants[N.quants$n.uptake.ug.m2.sec[,1]>0,"n.status"]<-"uptake"
+N.quants[N.quants$n.uptake.ug.m2.sec[,3]<0,"n.status"]<-"release"
+
+N.quants$binary<-0
+N.quants[N.quants$n.uptake.ug.m2.sec[,1]>0,"binary"]<-1
+N.quants[N.quants$n.uptake.ug.m2.sec[,3]<0,"binary"]<-(-1)
+
+N.quants$nutrient<-"DIN"
+
+
+####
+cbbPalette <- c( "#009E73","#E69F00","#56B4E9")
+
+N.quants$n.status<-factor(N.quants$n.status,levels=c("release","balanced","uptake"))
+  
+
+dist.plot.N<-ggplot(N.quants,aes(x=as.factor(NP),fill=n.status))+geom_bar(stat="count",position="fill")+
+  theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+
+  theme(text = element_text(size=20))+xlab("")+ylab("Proportion of Observations")+
+  guides(fill=guide_legend(title=""))+annotate("text",x=6,y=0.92,label="A  ",size=10)
+
+
+P.quants<-aggregate( p.uptake.ug.m2.sec~ NP+date,data=compiled_data[compiled_data$Meter==70,], 
+          FUN = 'quantile', probs=c(2.5, 50, 97.5)/100 )
+
+P.quants$p.status<-"balanced"
+P.quants[P.quants$p.uptake.ug.m2.sec[,1]>0,"p.status"]<-"uptake"
+P.quants[P.quants$p.uptake.ug.m2.sec[,3]<0,"p.status"]<-"release"
+
+
+
+
+dist.plot.P<-ggplot(P.quants,aes(x=as.factor(NP),fill=p.status))+geom_bar(stat="count",position = "fill")+
+  theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+
+  theme(text = element_text(size=20))+xlab("Target N:P ratio")+ylab("Proportion of Observations")+annotate("text",x=6,y=0.92,label="B  ",size=10)
+  
+multiplot(dist.plot.N,dist.plot.P,cols=1)
+
+tiff(filename="distribution.tiff",units="in",res=600,width=6,height=10,compression="lzw")
+multiplot(dist.plot.N,dist.plot.P,cols=1)
+dev.off()
+
+#frequencies of different states (reported in results section)
+summary(as.factor(P.quants$p.status))
+
+#uptake
+85/176
+#release
+43/176
+
+#DIN
+summary(as.factor(N.quants$n.status))
+
+89/168
+
+50/168
+```
+
+#Figure 3
+time series of uptake and release
+```{r}
+cbbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73","#CC79A7")
+
+P.quants$binary<-0
+P.quants[P.quants$p.uptake.ug.m2.sec[,1]>0,"binary"]<-1
+P.quants[P.quants$p.uptake.ug.m2.sec[,3]<0,"binary"]<-(-1)
+P.quants$nutrient<-"SRP"
+
+P.quants$binary<-P.quants$binary+0.1
+#quick output
+output<-data.frame(stream=P.quants$NP)
+
+
+P.quants$NP<-as.factor(P.quants$NP)
+
+
+
+plot.data<-rbind(P.quants,setNames(N.quants,names(P.quants)))
+
+patterns_2<-ggplot(plot.data[plot.data$NP==2,],aes(x=date,y=binary,color=nutrient,shape=nutrient))+
+  #geom_point(position=position_jitter(width=0, height=0.05))+
+  geom_point(size=3)+theme_classic()+scale_color_manual(values=c("#56B4E9",  "#009E73"))+
+  scale_y_continuous(breaks = -1:1, labels=c("Net Release","Balanced","Net Uptake"))+ylab(NULL)+theme(axis.text=element_text(size=12))+xlab("")+annotate("text",x=as.Date("2011-07-26"),y=-0.5,label= "N:P = 2",size=8,hjust=0)+annotate("text",x=as.Date("2013-08-20"),y=0.92,label="A",size=8)+xlim(as.Date("2011-07-25"),as.Date("2013-08-22"))+ theme(legend.position = "none")+scale_shape_manual(values=c(2,19))
+
+patterns_8<-ggplot(plot.data[plot.data$NP==8,],aes(x=date,y=binary,color=nutrient,shape=nutrient))+
+  #geom_point(position=position_jitter(width=0, height=0.05))+
+  geom_point(size=3)+theme_classic()+scale_color_manual(values=c("#56B4E9",  "#009E73"))+
+  scale_y_continuous(breaks = -1:1, labels=c("Net Release","Balanced","Net Uptake"))+ylab(NULL)+theme(axis.text=element_text(size=12))+xlab("")+annotate("text",x=as.Date("2011-07-26"),y=-0.5,label= "N:P = 8",size=8,hjust=0)+annotate("text",x=as.Date("2013-08-20"),y=0.92,label="C",size=8)+xlim(as.Date("2011-07-25"),as.Date("2013-08-22"))+ theme(legend.position = "none")+scale_shape_manual(values=c(2,19))
+  
+
+
+patterns_16<-ggplot(plot.data[plot.data$NP==16,],aes(x=date,y=binary,color=nutrient,shape=nutrient))+
+  #geom_point(position=position_jitter(width=0, height=0.05))+
+  geom_point(size=3)+theme_classic()+scale_color_manual(values=c("#56B4E9",  "#009E73"))+
+  scale_y_continuous(breaks = -1:1, labels=c("Net Release","Balanced","Net Uptake"))+ylab(NULL)+theme(axis.text=element_text(size=12))+xlab("")+annotate("text",x=as.Date("2011-07-26"),y=-0.5,label= "N:P = 16",size=8,hjust=0)+annotate("text",x=as.Date("2013-08-20"),y=0.92,label="E",size=8)+xlim(as.Date("2011-07-25"),as.Date("2013-08-22"))+ theme(legend.position = c(0.06,0.86))+scale_shape_manual(values=c(2,19))
+  
+
+
+patterns_32<-ggplot(plot.data[plot.data$NP==32,],aes(x=date,y=binary,color=nutrient,shape=nutrient))+
+  #geom_point(position=position_jitter(width=0, height=0.05))+
+  geom_point(size=3)+theme_classic()+scale_color_manual(values=c("#56B4E9",  "#009E73"))+
+  scale_y_continuous(breaks = -1:1, labels=c("Net Release","Balanced","Net Uptake"))+ylab(NULL)+theme(axis.text=element_text(size=12))+xlab("")+annotate("text",x=as.Date("2011-07-26"),y=-0.5,label= "N:P = 32",size=8,hjust=0)+annotate("text",x=as.Date("2013-08-20"),y=0.92,label="G",size=8)+xlim(as.Date("2011-07-25"),as.Date("2013-08-22"))+ theme(legend.position = "none")+scale_shape_manual(values=c(2,19))
+  
+
+
+patterns_128<-ggplot(plot.data[plot.data$NP==128,],aes(x=date,y=binary,color=nutrient,shape=nutrient))+
+  #geom_point(position=position_jitter(width=0, height=0.05))+
+  geom_point(size=3)+theme_classic()+scale_color_manual(values=c("#56B4E9",  "#009E73"))+
+  scale_y_continuous(breaks = -1:1, labels=c("Net Release","Balanced","Net Uptake"))+ylab(NULL)+theme(axis.text=element_text(size=12))+xlab("")+annotate("text",x=as.Date("2011-07-26"),y=-0.5,label= "N:P = 128",size=8,hjust=0)+xlab("Date")+annotate("text",x=as.Date("2013-08-20"),y=0.92,label="I",size=8)+xlim(as.Date("2011-07-25"),as.Date("2013-08-22"))+ theme(legend.position = "none")+scale_shape_manual(values=c(2,19))
+
+tiff(filename="uptake_release_new.tiff",units="in",res=800,width=8,height=10,compression="lzw")
+multiplot(patterns_2,patterns_8,patterns_16,patterns_32,patterns_128)
+dev.off()
+
+
+
+```
+
+# Figure 4
+continous distributions of uptake rates
+
+```{r}
+### What were the lowest levels of detectable uptake and release?
+#N
+
+N.uptake<-N.quants[N.quants$n.status=="uptake",]
+
+min.n.uptake<-aggregate(n.uptake.ug.m2.sec[,2]~NP,data=N.uptake,min)
+
+N.release<-N.quants[N.quants$n.status=="release",]
+
+min.n.release<-aggregate(n.uptake.ug.m2.sec[,2]~NP,data=N.release,max)
+
+#P
+
+P.uptake<-P.quants[P.quants$p.status=="uptake",]
+
+min.p.uptake<-aggregate(p.uptake.ug.m2.sec[,2]~NP,data=P.uptake,min)
+
+P.release<-P.quants[P.quants$p.status=="release",]
+
+min.p.release<-aggregate(p.uptake.ug.m2.sec[,2]~NP,data=P.release,max)
+
+### pulled values from here for cuttoffs 
+
+cutoffs_for_n_status<-data.frame(NP=c(2,8,16,32,128),uptake.cutoff=c(0.236129,1.2813237,1.9793912,1.2528956,0.5989433)/14,release.cutoff=c(-0.3752237,-1.3927232,-5.0177689,-1.2591464,-0.5233089)/14)
+
+cutoffs_for_p_status<-data.frame(NP=c(2,8,16,32,128),uptake.cutoff=c(0.28202114,0.56563596,0.52455126,0.12111694,0.07055963)/31,release.cutoff=c(-0.9289299,-0.2931354,-1.6791215,-0.1215278,-0.1046618)/31)
+
+truncated.p.dist<-data.frame()
+truncated.n.dist<-data.frame()
+
+
+for (i in 1:5){
+  
+  one_stream<-compiled_data[compiled_data$Meter==70 & compiled_data$stream==levels(compiled_data$stream)[i],]
+  
+  one_stream_2<-one_stream[one_stream$p.uptake.uM.m2.sec>quantile(one_stream$p.uptake.uM.m2.sec,0.05,na.rm=TRUE) & one_stream$p.uptake.uM.m2.sec<quantile(one_stream$p.uptake.uM.m2.sec,0.95,na.rm=TRUE),]
+  
+  
+  one_stream_3<-one_stream[one_stream$n.uptake.uM.m2.sec>quantile(one_stream$n.uptake.uM.m2.sec,0.05,na.rm=TRUE) & one_stream$n.uptake.uM.m2.sec<quantile(one_stream$n.uptake.uM.m2.sec,0.95,na.rm=TRUE),]
+  
+  release.limits.n<-cutoffs_for_n_status[cutoffs_for_n_status$NP==mean(one_stream_3$NP,na.rm=TRUE),]
+  
+  release.limits.p<-cutoffs_for_p_status[cutoffs_for_p_status$NP==mean(one_stream_3$NP,na.rm=TRUE),]
+  
+  one_stream_3<-one_stream_3[is.na(one_stream_3$n.uptake.ug.m2.sec)==FALSE,]
+  
+  
+
+  dens.p<-density(one_stream_3$p.uptake.uM.m2.sec,na.rm=TRUE)
+  dens.n<-density(one_stream_3$n.uptake.uM.m2.sec,na.rm=TRUE)
+  
+  dens.n.2<-data.frame(NP=mean(one_stream_3$NP,na.rm=TRUE),height=dens.n$y,x=dens.n$x,cutoff=NA)
+  dens.n.2$cutoff<-"balanced"
+  dens.n.2[dens.n.2$x<release.limits.n$release.cutoff,"cutoff"]<-"uptake"
+  dens.n.2[dens.n.2$x>release.limits.n$uptake.cutoff,"cutoff"]<-"release"
+  
+  dens.p.2<-data.frame(NP=mean(one_stream_3$NP,na.rm=TRUE),height=dens.p$y,x=dens.p$x,cutoff=NA) 
+  dens.p.2$cutoff<-"balanced"
+  dens.p.2[dens.p.2$x<release.limits.p$release.cutoff,"cutoff"]<-"uptake"
+  dens.p.2[dens.p.2$x>release.limits.p$uptake.cutoff,"cutoff"]<-"release"
+
+  truncated.p.dist<-rbind(truncated.p.dist,dens.p.2)
+  
+  truncated.n.dist<-rbind(truncated.n.dist,dens.n.2)
+  #truncated.p.dist<-rbind(truncated.p.dist,one_stream_2)
+  
+}
+
+truncated.n.dist$y=as.factor(truncated.n.dist$NP)
+truncated.n.dist$y=truncated.n.dist$NP
+
+#ggplot(truncated.n.dist[is.na(truncated.n.dist$NP)==FALSE,], aes(x, y, height = height, group = y, fill = cutoff)) + geom_ridgeline_gradient() + scale_fill_gradient()
+
+cbbPalette <- c("#E69F00","#56B4E9","#009E73")
+
+dist2<-ggplot(truncated.n.dist[truncated.n.dist$NP==2,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=12))+theme(text =element_text(size=20))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-2.5,2.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+annotate(x=-2,y=4,"text",label="N:P=2",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=2.2,y=4,"text",label="A",size=6)
+
+dist8<-ggplot(truncated.n.dist[truncated.n.dist$NP==8,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=12))+theme(text =element_text(size=20))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-2.5,2.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+annotate(x=-2,y=0.65,"text",label="N:P=8",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=2.2,y=0.65,"text",label="C",size=6)
+
+dist16<-ggplot(truncated.n.dist[truncated.n.dist$NP==16,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=12))+theme(text =element_text(size=20))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-2.5,2.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+ylab("Kernal Density")+annotate(x=-2,y=0.8,"text",label="N:P=16",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=2.2,y=0.8,"text",label="E",size=6)
+
+dist32<-ggplot(truncated.n.dist[truncated.n.dist$NP==32,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=12))+theme(text =element_text(size=20))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-2.5,2.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+annotate(x=-2,y=1.9,"text",label="N:P=32",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=2.2,y=1.9,"text",label="G",size=6)
+
+dist128<-ggplot(truncated.n.dist[truncated.n.dist$NP==128,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=8))+theme(text =element_text(size=16))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-2.5,2.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+xlab(expression("DIN Uptake Rate ("*mu*M~m^-2~s^-1*")"))+theme(axis.text=element_text(size=12))+annotate(x=-2,y=0.7,"text",label="N:P=128",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=2.2,y=0.7,"text",label="I",size=6)
+
+
+pdist2<-ggplot(truncated.p.dist[truncated.p.dist$NP==2,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=12))+theme(text =element_text(size=20))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-0.5,0.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+annotate(x=-0.4,y=11,"text",label="N:P=2",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=0.44,y=11,"text",label="B",size=6)
+
+pdist8<-ggplot(truncated.p.dist[truncated.p.dist$NP==8,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=12))+theme(text =element_text(size=20))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-0.5,0.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+annotate(x=-0.4,y=4.5,"text",label="N:P=8",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=0.44,y=4.5,"text",label="D",size=6)
+
+pdist16<-ggplot(truncated.p.dist[truncated.p.dist$NP==16,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=12))+theme(text =element_text(size=20))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-0.5,0.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+annotate(x=-0.4,y=14,"text",label="N:P=16",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=0.44,y=14,"text",label="F",size=6)
+
+pdist32<-ggplot(truncated.p.dist[truncated.p.dist$NP==32,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=12))+theme(text =element_text(size=20))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-0.5,0.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+annotate(x=-0.4,y=40,"text",label="N:P=32",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=0.44,y=40,"text",label="H",size=6)
+
+pdist128<-ggplot(truncated.p.dist[truncated.p.dist$NP==128,], aes(x=x,y=height,fill=cutoff,color=cutoff))+geom_area()+theme_classic()+scale_fill_manual(values=alpha(cbbPalette,0.7))+theme(axis.text=element_text(size=8))+theme(text =element_text(size=16))+theme(legend.title = element_blank())+xlab("")+ylab("")+xlim(-0.5,0.5)+theme(legend.position="none")+scale_color_manual(values=alpha(cbbPalette,0.7))+xlab(expression("SRP Uptake Rate ("*mu*M~m^-2~s^-1*")"))+theme(axis.text=element_text(size=12))+annotate(x=-0.4,y=70,"text",label="N:P=128",size=6)+theme(axis.text.y = element_blank(), axis.ticks = element_blank())+annotate(x=0.44,y=70,"text",label="J",size=6)
+
+
+
+tiff(filename="distribution_of_uptake.tiff",units="in",res=800,width=8,height=12,compression="lzw")
+multiplot(dist2,dist8,dist16,dist32,dist128,pdist2,pdist8,pdist16,pdist32,pdist128,cols=2)
+dev.off()
+
+
+```
+#Figure 5
+stoich plots and the associated statistics
+
+
+
+```{r}
+
+library(lme4)
+library(lmerTest)
+
+stoich<-merge(N.quants,P.quants,by=c("date","NP"))
+
+bottom<-compiled_data[compiled_data$Meter==70,]
+bottom$conservative.NP<-(bottom$conservative_DIN/14)/(bottom$conservative_SRP/31)
+
+bottom$uptake.NP<-(bottom$n.uptake.ug.m2.sec/14)/(bottom$p.uptake.ug.m2.sec/31)
+
+inputs.stoich<-aggregate( conservative.NP~ NP+date,data=bottom, 
+           FUN = 'quantile', probs=c(2.5, 50, 97.5)/100 )
+
+bottom.stoich<-aggregate(uptake.NP~ NP+date,data=bottom, 
+           FUN = 'quantile', probs=c(2.5, 50, 97.5)/100 )
+
+stoich<-merge(stoich,inputs.stoich,by=c("date","NP"))
+stoich<-merge(stoich,bottom.stoich,by=c("date","NP"))
+
+stoich2<-stoich[stoich$n.status=="uptake" & stoich$p.status=="uptake",]
+
+stoich3<-stoich[stoich$n.status=="release" & stoich$p.status=="release",]
+
+
+cbbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73","#CC79A7")
+
+
+stoich2$Target_NP_ratio<-as.factor(stoich2$NP)
+
+se <- function(x) sd(x) / sqrt(length(x)) 
+
+enrichment.conc<-aggregate(conservative.NP[,2]~NP,data=stoich2,mean)
+enrichment.conc.se<-aggregate(conservative.NP[,2]~NP,data=stoich2,se)
+
+uptake.ratio<-aggregate(uptake.NP[,2]~NP,data=stoich2,mean)
+uptake.ratio.se<-aggregate(uptake.NP[,2]~NP,data=stoich2,se)
+
+stoich3<-data.frame(NP=enrichment.conc[,1],mean.enrichment.ratio=enrichment.conc[,2],enrichment.ratio.se=enrichment.conc.se[,2],uptake.ratio.mean=uptake.ratio[,2],uptake.ratio.se=uptake.ratio.se[,2])
+
+log.normal.plot<-ggplot(stoich3,aes(x=mean.enrichment.ratio,y=uptake.ratio.mean,color=as.factor(NP),shape=as.factor(NP)))+geom_abline(intercept=0.21251,slope=0.92358,size=1,color="black")+ theme_classic()+ geom_abline(intercept=0,slope=1,size=1,linetype="dashed")+theme(text =element_text(size=20))+ scale_x_log10()+scale_y_log10()+scale_color_manual(values=cbbPalette)+xlab("Added + Background N:P ratio")+ylab("Uptake N:P ratio")+scale_shape_manual(values=c(0, 1, 2,18,19))+theme(legend.position = c(0.2, 0.81))+annotate("text",x=118,y=2,label="B",size=8)+xlim(1,166)+ylim(1,166)+geom_point(size=5)+geom_errorbar(aes(ymin=uptake.ratio.mean-uptake.ratio.se*1.96,ymax=uptake.ratio.mean+uptake.ratio.se*1.96),width=0.01)+geom_errorbarh(aes(xmin=mean.enrichment.ratio-enrichment.ratio.se*1.96,xmax=mean.enrichment.ratio+enrichment.ratio.se*1.96),width=0.01)
+
+### Simple plot
+N.averages<-aggregate(n.uptake.uM.m2.sec~date+as.factor(NP),compiled_data,median)
+P.averages<-aggregate(p.uptake.uM.m2.sec~date+as.factor(NP),compiled_data,median)
+
+averages<-merge(N.averages,P.averages,by=c("date","as.factor(NP)"))
+
+averages$NP<-averages$`as.factor(NP)`
+
+simple.plot<-ggplot(averages,aes(y=n.uptake.uM.m2.sec,x=p.uptake.uM.m2.sec,color=NP,shape=NP))+geom_point(size=2)+geom_smooth(method="lm",se=FALSE)+theme_classic()+xlab(expression("Net SRP uptake ("*mu*M~m^-2~s^-1*")"))+ylab(expression("Net DIN uptake ("*mu*M~m^-2~s^-1*")"))+scale_color_manual(values=cbbPalette,name="")+theme(text =element_text(size=20))+theme(legend.position = "none")+geom_abline(intercept = 0,slope=16,linetype="dashed")+ scale_shape_manual(values=c(0, 1, 2,18,19))#+annotate("text",x=5,y=-28,label="A",size=8)
+simple.plot
+
+tiff(filename="new.stoich.plot.july.tiff",units="in",res=600,width=6,height=10,compression="lzw")
+multiplot(simple.plot,log.normal.plot,cols=1)
+dev.off()
+
+simple.model<-lm(n.uptake.uM.m2.sec~p.uptake.uM.m2.sec*NP,data=averages)
+anova(simple.model)
+summary(simple.model)
+
+#what are the slopes of each line  ## These presented in table A3
+summary(lm(n.uptake.uM.m2.sec~p.uptake.uM.m2.sec,data=averages[averages$NP==2,]))
+summary(lm(n.uptake.uM.m2.sec~p.uptake.uM.m2.sec,data=averages[averages$NP==8,]))
+summary(lm(n.uptake.uM.m2.sec~p.uptake.uM.m2.sec,data=averages[averages$NP==16,]))
+summary(lm(n.uptake.uM.m2.sec~p.uptake.uM.m2.sec,data=averages[averages$NP==32,]))
+summary(lm(n.uptake.uM.m2.sec~p.uptake.uM.m2.sec,data=averages[averages$NP==128,]))
+
+
+## what is the log-log slope of inputs vs. uptake (calculating H-1)
+log.linear<-lm(log(uptake.NP[,2])~log(conservative.NP[,2]),data=stoich2)
+anova(log.linear)
+summary(log.linear)
+
+## is the log-log slope different than 1?
+log.linear<-lm(log(uptake.NP[,2])~log(conservative.NP[,2]),offset= 1.00*log(conservative.NP[,2]),data=stoich2)
+anova(log.linear)
+summary(log.linear)
+
+```
+
+writing file for further analysis
+```{r}
+
+write.csv(compiled_data,file="Final_uptake_estiamtes.csv")
+
+write.csv(P.quants,file="P_uptake_status.csv")
+write.csv(N.quants,"N.uptake.status.csv")
+```
+

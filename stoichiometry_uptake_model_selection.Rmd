@@ -1,0 +1,505 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Regression models for stoichiometry uptake project
+
+loading data
+```{r}
+library(lme4)
+library(lmerTest)
+library(MuMIn)
+library(MASS)
+setwd("C:\\Users\\nt78066\\OneDrive - University of Georgia\\Documents\\SNAX_3_nutrient_uptake\\")
+d<-read.csv("standardized_model_data.csv")
+
+d$date<-as.Date(strptime(as.character(d$date),format="%Y-%m-%d"))
+d$treatment.year<-"year.one"
+d[d$date>as.Date("2012-07-11"),"treatment.year"]<-"year.two"
+
+
+```
+
+
+
+```{r}
+NP.id<-data.frame(stream=c("WS06","WS07","WS08","WS09","WS10"),NP=c(32,128,2,16,8))
+
+#splitting N and P uptake data
+n.uptake<-subset(d, select = -c(p.uptake) )
+n.uptake<-n.uptake[complete.cases(n.uptake),]
+
+p.uptake<-subset(d,select=-c(n.uptake))
+p.uptake<-p.uptake[complete.cases(p.uptake),]
+
+p.uptake<-merge(p.uptake,NP.id)
+n.uptake<-merge(n.uptake,NP.id)
+
+best.model<-rep(NA,1000)
+# stepwise model selection for each interation of the data
+for (i in 1:1000){
+
+past.optimal.model<-lmer(p.uptake~fungi+chla++corrected.flow+temp+light+added.NP+(1|treatment.year/stream),data=p.uptake[p.uptake$iteration==i,],na.action = na.fail)
+
+#min.model<-lmer(p.uptake~1+(1|stream),data=p.uptake[p.uptake$iteration==i,],na.action = na.fail)
+
+
+obj<-step(past.optimal.model,reduce.random = FALSE)
+obj2<-obj$fixed
+
+output<-obj2[obj2$Eliminated==0,]
+
+terms<-row.names(output)
+if (length(terms)>0){
+best.model[i]<-knitr::combine_words(terms)}else(best.model[i]<-NA)
+}
+
+test<-data.frame(models=as.factor(best.model))
+# This tallys up how often each model performed best
+summary(test)
+
+
+# chla only is clearly the best model for p uptake
+
+# Now estimating teh paramaters of this model by the data from each iteration
+
+model.fit<-data.frame(chla=rep(NA,1000),r.squared.m=rep(NA,1000),r.squared.c=rep(NA,1000))
+for (i in 1:1000){
+  
+model<-lmer(p.uptake~chla+(1|treatment.year/stream),data=p.uptake[p.uptake$iteration==i,])
+p.uptake.model<-summary(model)
+
+
+coef<-p.uptake.model$coefficients[2,1]
+
+#coef3<-p.uptake.model$coefficients[4,1]
+rsq.m<-r.squaredGLMM(model)[1,1]
+rsq.c<-r.squaredGLMM(model)[1,2]
+
+
+model.fit$chla[i]<-coef
+#model.fit$SRP[i]<-coef3
+model.fit$r.squared.m[i]<-rsq.m
+model.fit$r.squared.c[i]<-rsq.c
+
+}
+
+mean(model.fit$chla)
+quantile(model.fit$chla,probs=c(0.025,0.975),na.rm=TRUE)
+quantile(model.fit$r.squared.m,probs=c(0.025,0.975))
+mean(model.fit$r.squared.m)
+mean(model.fit$r.squared.c)
+quantile(model.fit$r.squared.c,probs=c(0.025,0.975))
+```
+
+
+```{r}
+best.model<-rep(NA,1000)
+for (i in 1:1000){
+
+#past.optimal.model<-lmer(n.uptake~fungi.delta+fungi+chla+chla.delta+corrected.flow+temp+light+added.NP+DIN+SRP+(1|stream),data=n.uptake[n.uptake$iteration==i,],na.action = na.fail)
+
+past.optimal.model<-lmer(n.uptake~fungi+chla+corrected.flow+temp+light+added.NP+(1|treatment.year/stream),data=n.uptake[n.uptake$iteration==i,],na.action = na.fail)
+
+
+obj<-step(past.optimal.model,reduce.random = FALSE)
+obj2<-obj$fixed
+
+output<-obj2[obj2$Eliminated==0,]
+
+terms<-row.names(output)
+if (length(terms)>0){
+best.model[i]<-knitr::combine_words(terms)}else(best.model[i]<-NA)
+}
+
+
+test<-data.frame(models=as.factor(best.model))
+summary(test)
+
+#chla is the best model
+
+
+model.fit<-data.frame(chla.coef=rep(NA,1000),r.squared.m=rep(NA,1000),r.squared.c=rep(NA,1000))
+for (i in 1:1000){
+  
+model<-lmer(n.uptake~chla+(1|treatment.year/stream),data=n.uptake[n.uptake$iteration==i,])
+  n.uptake.model<-summary(model)
+
+
+coef<-n.uptake.model$coefficients[2,1]
+#coef2<-n.uptake.model$coefficients[3,1]
+
+rsq.m<-r.squaredGLMM(model)[1,1]
+rsq.c<-r.squaredGLMM(model)[1,2]
+
+model.fit$chla.coef[i]<-coef
+#model.fit$flow.coef[i]<-coef2
+
+model.fit$r.squared.m[i]<-rsq.m
+model.fit$r.squared.c[i]<-rsq.c
+
+}
+
+hist(model.fit$chla.coef)
+hist(model.fit$r.squared)
+
+mean(model.fit$chla.coef)
+quantile(model.fit$chla.coef,probs=c(0.025,0.975))
+mean(model.fit$r.squared.m)
+quantile(model.fit$r.squared.m,probs=c(0.025,0.975))
+mean(model.fit$r.squared.c)
+quantile(model.fit$r.squared.c,probs=c(0.025,0.975))
+
+```
+binary models N uptake
+
+
+
+```{r}
+n.status<-read.csv("N.uptake.status.csv")
+
+n2<-merge(n.uptake,n.status,by=c("date","NP"))
+
+n2$uptake.binary<-0
+n2[n2$n.status=="uptake","uptake.binary"]<-1
+
+best.model<-rep(NA,1000)
+
+for (i in 1:1000){
+
+past.optimal.model<-glm(uptake.binary~fungi+chla+corrected.flow+temp+light+stream+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+
+
+obj<-step(past.optimal.model,reduce.random = FALSE)
+obj2<-anova(obj)
+
+terms<-row.names(obj2)
+
+if (length(terms)>0){
+best.model[i]<-knitr::combine_words(terms)}else(best.model[i]<-NA)
+}
+
+
+test<-data.frame(models=as.factor(best.model))
+summary(test)
+
+
+
+model.fit<-data.frame(chla.coef=rep(NA,1000),flow.coef=rep(NA,1000),np.coef=rep(NA,1000),light.coef=rep(NA,1000),r.squared.m=rep(NA,1000))
+for (i in 1:1000){
+  
+model<-glm(uptake.binary~chla+corrected.flow+light+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+n.uptake.model<-summary(model)
+
+
+
+rsq.m<-r.squaredGLMM(model)[1,1]
+
+model.fit$chla.coef[i]<-n.uptake.model$coefficients[2,1]
+model.fit$flow.coef[i]<-n.uptake.model$coefficients[3,1]
+model.fit$light.coef[i]<-n.uptake.model$coefficients[4,1]
+model.fit$np.coef[i]<-n.uptake.model$coefficients[5,1]
+
+
+model.fit$r.squared.m[i]<-rsq.m
+#model.fit$r.squared.c[i]<-rsq.c
+
+}
+
+mean(model.fit$r.squared.m)
+quantile(model.fit$r.squared.m,probs=c(0.025,0.975))
+
+mean(model.fit$chla.coef)
+quantile(model.fit$chla.coef,probs=c(0.025,0.975))
+
+mean(model.fit$flow.coef)
+quantile(model.fit$flow.coef,probs=c(0.025,0.975))
+
+mean(model.fit$light.coef)
+quantile(model.fit$light.coef,probs=c(0.025,0.975))
+
+mean(model.fit$np.coef)
+quantile(model.fit$np.coef,probs=c(0.025,0.975))
+
+
+```
+
+# N release
+```{r}
+#n.status<-read.csv("N.uptake.status.csv")
+
+n2<-merge(n.uptake,n.status,by=c("date","NP"))
+
+n2$uptake.binary<-0
+n2[n2$n.status=="release","uptake.binary"]<-1
+
+best.model<-rep(NA,1000)
+
+for (i in 1:1000){
+
+past.optimal.model<-glm(uptake.binary~+fungi+chla+corrected.flow+temp+light+stream+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+
+#min.model<-lmer(p.uptake~1+(1|stream),data=p.uptake[p.uptake$iteration==i,],na.action = na.fail)
+
+
+obj<-step(past.optimal.model,reduce.random = FALSE)
+obj2<-anova(obj)
+
+terms<-row.names(obj2)
+
+if (length(terms)>0){
+best.model[i]<-knitr::combine_words(terms)}else(best.model[i]<-NA)
+}
+
+
+test<-data.frame(models=as.factor(best.model))
+summary(test)
+
+
+model.fit<-data.frame(chla.coef=rep(NA,1000),light.coef=rep(NA,1000),r.squared.m=rep(NA,1000))
+for (i in 1:1000){
+  
+model<-glm(uptake.binary~chla+light,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+n.uptake.model<-summary(model)
+
+coef<-n.uptake.model$coefficients[2,1]
+coef2<-n.uptake.model$coefficients[3,1]
+
+rsq.m<-r.squaredGLMM(model)[1,1]
+#rsq.c<-r.squaredGLMM(model)[1,2]
+
+model.fit$chla.coef[i]<-coef
+
+model.fit$r.squared.m[i]<-rsq.m
+
+model.fit$light.coef[i]<-coef2
+#model.fit$r.squared.c[i]<-rsq.c
+
+}
+
+
+mean(model.fit$r.squared.m)
+quantile(model.fit$r.squared.m,probs=c(0.025,0.975))
+
+mean(model.fit$chla.coef)
+quantile(model.fit$chla.coef,probs=c(0.025,0.975))
+
+
+mean(model.fit$light.coef)
+quantile(model.fit$light.coef,probs=c(0.025,0.975))
+
+
+```
+
+
+p uptake
+```{r}
+p.status<-read.csv("P_uptake_status.csv")
+
+n2<-merge(p.uptake,p.status,by=c("date","NP"))
+
+n2$uptake.binary<-0
+n2[n2$p.status=="uptake","uptake.binary"]<-1
+
+best.model<-rep(NA,1000)
+
+for (i in 1:1000){
+
+past.optimal.model<-glm(uptake.binary~fungi+chla+corrected.flow+temp+light+stream+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+
+#min.model<-lmer(p.uptake~1+(1|stream),data=p.uptake[p.uptake$iteration==i,],na.action = na.fail)
+
+
+obj<-step(past.optimal.model,reduce.random = FALSE)
+obj2<-anova(obj)
+
+terms<-row.names(obj2)
+
+if (length(terms)>0){
+best.model[i]<-knitr::combine_words(terms)}else(best.model[i]<-NA)
+}
+
+
+test<-data.frame(models=as.factor(best.model))
+summary(test)
+
+model.fit<-data.frame(chla.coef=rep(NA,1000),flow.coef=rep(NA,1000),r.squared.m=rep(NA,1000))
+for (i in 1:1000){
+  
+model<-glm(uptake.binary~chla+corrected.flow+stream,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+n.uptake.model<-summary(model)
+
+coef<-n.uptake.model$coefficients[2,1]
+coef2<-n.uptake.model$coefficients[3,1]
+
+rsq.m<-r.squaredGLMM(model)[1,1]
+#rsq.c<-r.squaredGLMM(model)[1,2]
+
+model.fit$chla.coef[i]<-n.uptake.model$coefficients[2,1]
+model.fit$flow.coef[i]<-n.uptake.model$coefficients[3,1]
+model.fit$r.squared.m[i]<-rsq.m
+#model.fit$r.squared.c[i]<-rsq.c
+
+}
+
+
+mean(model.fit$r.squared.m)
+quantile(model.fit$r.squared.m,probs=c(0.025,0.975))
+
+mean(model.fit$chla.coef)
+quantile(model.fit$chla.coef,probs=c(0.025,0.975))
+
+mean(model.fit$flow.coef)
+quantile(model.fit$flow.coef,probs=c(0.025,0.975))
+
+
+
+
+```
+
+```{r echo=FALSE}
+n2<-merge(p.uptake,p.status,by=c("date","NP"))
+
+n2$uptake.binary<-0
+n2[n2$p.status=="release","uptake.binary"]<-1
+
+best.model<-rep(NA,1000)
+
+for (i in 1:1000){
+
+past.optimal.model<-glm(uptake.binary~fungi+chla+corrected.flow+temp+light+stream+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+
+#min.model<-lmer(p.uptake~1+(1|stream),data=p.uptake[p.uptake$iteration==i,],na.action = na.fail)
+
+
+obj<-step(past.optimal.model,reduce.random = FALSE)
+obj2<-anova(obj)
+
+terms<-row.names(obj2)
+
+if (length(terms)>0){
+best.model[i]<-knitr::combine_words(terms)}else(best.model[i]<-NA)
+}
+
+
+test<-data.frame(models=as.factor(best.model))
+summary(test)
+
+
+model.fit<-data.frame(chla.coef=rep(NA,1000),flow.coef=rep(NA,1000),np.coef=rep(NA,1000),r.squared.m=rep(NA,1000))
+for (i in 1:1000){
+  
+model<-glm(uptake.binary~chla+corrected.flow+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+n.uptake.model<-summary(model)
+
+coef<-n.uptake.model$coefficients[2,1]
+
+rsq.m<-r.squaredGLMM(model)[1,1]
+#rsq.c<-r.squaredGLMM(model)[1,2]
+
+model.fit$chla.coef[i]<-n.uptake.model$coefficients[2,1]
+model.fit$flow.coef[i]<-n.uptake.model$coefficients[3,1]
+model.fit$np.coef[i]<-n.uptake.model$coefficients[4,1]
+
+model.fit$r.squared.m[i]<-rsq.m
+
+}
+
+
+mean(model.fit$r.squared.m)
+quantile(model.fit$r.squared.m,probs=c(0.025,0.975))
+
+mean(model.fit$chla.coef)
+quantile(model.fit$chla.coef,probs=c(0.025,0.975))
+
+mean(model.fit$flow.coef)
+quantile(model.fit$flow.coef,probs=c(0.025,0.975))
+
+
+mean(model.fit$np.coef)
+quantile(model.fit$np.coef,probs=c(0.025,0.975))
+
+
+```
+NP vs. average uptake rate in each stream
+```{r}
+
+g<-read.csv("unstandardized_model_data.csv")
+g$NP.added<-(g$conservative_DIN/14)/(g$conservative_SRP/31)
+
+output<-data.frame(p.coef=rep(NA,1000),n.coef=rep(NA,1000),n.rsq=rep(NA,1000),p.rsq=rep(NA,1000))
+for (i in 1:1000){
+  
+  data<-g[g$interation==i,]
+  NP<-aggregate(NP.added~stream,data=data,mean,na.rm=TRUE)
+  P.uptake<-aggregate(p.uptake.ug.m2.sec~stream,data=data,mean,na.rm=TRUE)
+  N.uptake<-aggregate(n.uptake.ug.m2.sec~stream,data=data,mean,na.rm=TRUE)
+  
+  g1<-merge(NP,P.uptake)
+  g2<-merge(g1,N.uptake)
+  
+  g2$NP.added[which(!is.finite(g2$NP.added))] <- NA
+  
+  p.mod<-summary(lm(p.uptake.ug.m2.sec~log(NP.added),data=g2))
+  n.mod<-summary(lm(n.uptake.ug.m2.sec~log(NP.added),data=g2))
+  
+  output$p.coef[i]<-p.mod$coefficients[2,1]
+  output$n.coef[i]<-n.mod$coefficients[2,1]
+  output$n.rsq[i]<-n.mod$r.squared
+  output$p.rsq[i]<-p.mod$r.squared
+  
+}
+  
+mean(output$p.coef)
+quantile(output$p.coef,probs=c(0.025,0.975))
+
+mean(output$n.coef)
+quantile(output$n.coef,probs=c(0.025,0.975))
+
+mean(output$n.rsq)
+quantile(output$n.rsq,probs=c(0.025,0.975))
+
+mean(output$p.rsq)
+quantile(output$p.rsq,probs=c(0.025,0.975))
+```
+
+#Figure  A2
+
+```{r}
+g$date<-as.Date(strptime(g$date,format=("%Y-%m-%d")))
+
+
+plot1<-ggplot(g[g$stream=="WS06" & g$interation<20,],aes(x=date,y=total.fungi/1000,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+annotate("text",x=as.Date("2011-10-01"),y=120,label="N:P = 32",size=6)+ylim(0,140)+ylab("")
+
+plot2<-ggplot(g[g$stream=="WS07" & g$interation<20,],aes(x=date,y=total.fungi/1000,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+annotate("text",x=as.Date("2011-10-01"),y=120,label="N:P = 128",size=6)+ylim(0,140)+ylab("")
+
+plot3<-ggplot(g[g$stream=="WS08" & g$interation<20,],aes(x=date,y=total.fungi/1000,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+ylab(expression("Fungal Biomass"~g~m^-2))+annotate("text",x=as.Date("2011-10-01"),y=120,label="N:P = 16",size=6)+ylim(0,140)
+
+plot4<-ggplot(g[g$stream=="WS09" & g$interation<20,],aes(x=date,y=total.fungi/1000,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+annotate("text",x=as.Date("2011-10-01"),y=120,label="N:P = 2",size=6)+ylim(0,140)+ylab("")
+
+plot5<-ggplot(g[g$stream=="WS10" & g$interation<20,],aes(x=date,y=total.fungi/1000,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+annotate("text",x=as.Date("2011-10-01"),y=120,label="N:P = 8",size=6)+ylim(0,140)+ylab("")
+
+tiff(filename="Fungal Biomass.tiff",units="in",res=200,width=7,height=10,compression="lzw")
+multiplot(plot1,plot2,plot3,plot4,plot5,cols = 1)
+dev.off()
+```
+#Figure A3
+
+```{r}
+plot1<-ggplot(g[g$stream=="WS06" & g$interation<20,],aes(x=date,y=chla+0.01,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+annotate("text",x=as.Date("2011-10-01"),y=300,label="N:P = 32",size=6)+ylab("")+ylim(-1,420)+xlim(as.Date("2011-7-11"),as.Date("2013-07-15"))
+
+plot2<-ggplot(g[g$stream=="WS07" & g$interation<20,],aes(x=date,y=chla+0.01,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+annotate("text",x=as.Date("2011-10-01"),y=300,label="N:P = 128",size=6)+ylab("")+ylim(-1,420)+xlim(as.Date("2011-7-11"),as.Date("2013-07-15"))
+
+plot3<-ggplot(g[g$stream=="WS08" & g$interation<20,],aes(x=date,y=chla+0.01,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+annotate("text",x=as.Date("2011-10-01"),y=300,label="N:P = 16",size=6)+ylab("")+ylab(expression("Algal Biomas (mg chlorophyll-"*alpha~m^-2*")"))+ylim(-1,400)+xlim(as.Date("2011-7-11"),as.Date("2013-07-15"))
+
+plot4<-ggplot(g[g$stream=="WS09" & g$interation<20,],aes(x=date,y=chla+0.01,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+annotate("text",x=as.Date("2011-10-01"),y=300,label="N:P = 2",size=6)+ylab("")+ylim(-1,420)+xlim(as.Date("2011-7-11"),as.Date("2013-07-15"))
+
+plot5<-ggplot(g[g$stream=="WS10" & g$interation<20,],aes(x=date,y=chla+0.01,color=as.factor(interation)))+geom_line()+theme_classic()+theme(legend.position="none")+annotate("text",x=as.Date("2011-10-01"),y=300,label="N:P = 8",size=6)+ylab("")+ylim(-1,420)+xlim(as.Date("2011-7-11"),as.Date("2013-07-15"))
+
+tiff(filename="Algal Biomass.tiff",units="in",res=200,width=7,height=10,compression="lzw")
+multiplot(plot4,plot5,plot3,plot1,plot2,cols = 1)
+dev.off()
+```
+
+
