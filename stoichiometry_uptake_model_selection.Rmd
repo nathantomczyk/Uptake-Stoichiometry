@@ -98,9 +98,9 @@ quantile(model.fit$r.squared.c,probs=c(0.025,0.975))
 best.model<-rep(NA,1000)
 for (i in 1:1000){
 
-#past.optimal.model<-lmer(n.uptake~fungi.delta+fungi+chla+chla.delta+corrected.flow+temp+light+added.NP+DIN+SRP+(1|stream),data=n.uptake[n.uptake$iteration==i,],na.action = na.fail)
+past.optimal.model<-lmer(p.uptake~fungi+chla++corrected.flow+temp+light+added.NP+(1|treatment.year/stream),data=p.uptake[p.uptake$iteration==i,],na.action = na.fail)
 
-past.optimal.model<-lmer(n.uptake~fungi+chla+corrected.flow+temp+light+added.NP+(1|treatment.year/stream),data=n.uptake[n.uptake$iteration==i,],na.action = na.fail)
+#min.model<-lmer(p.uptake~1+(1|stream),data=p.uptake[p.uptake$iteration==i,],na.action = na.fail)
 
 
 obj<-step(past.optimal.model,reduce.random = FALSE)
@@ -123,7 +123,7 @@ summary(test)
 model.fit<-data.frame(chla.coef=rep(NA,1000),r.squared.m=rep(NA,1000),r.squared.c=rep(NA,1000))
 for (i in 1:1000){
   
-model<-lmer(n.uptake~chla+(1|treatment.year/stream),data=n.uptake[n.uptake$iteration==i,])
+model<-lm(n.uptake~chla+(1|treatment.year/stream),data=n.uptake[n.uptake$iteration==i,])
   n.uptake.model<-summary(model)
 
 
@@ -156,7 +156,7 @@ binary models N uptake
 
 
 
-```{r}
+```{r, warning=FALSE}
 n.status<-read.csv("N.uptake.status.csv")
 
 n2<-merge(n.uptake,n.status,by=c("date","NP"))
@@ -168,7 +168,7 @@ best.model<-rep(NA,1000)
 
 for (i in 1:1000){
 
-past.optimal.model<-glm(uptake.binary~fungi+chla+corrected.flow+temp+light+stream+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+past.optimal.model<-glm(uptake.binary~fungi+chla+corrected.flow+temp+light+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
 
 
 obj<-step(past.optimal.model,reduce.random = FALSE)
@@ -186,15 +186,16 @@ summary(test)
 
 
 
-model.fit<-data.frame(chla.coef=rep(NA,1000),flow.coef=rep(NA,1000),np.coef=rep(NA,1000),light.coef=rep(NA,1000),r.squared.m=rep(NA,1000))
+model.fit<-data.frame(chla.coef=rep(NA,1000),flow.coef=rep(NA,1000),np.coef=rep(NA,1000),light.coef=rep(NA,1000),r.squared.m=rep(NA,1000),r.squared.c=rep(NA,1000))
 for (i in 1:1000){
   
-model<-glm(uptake.binary~chla+corrected.flow+light+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+model<-glmer(uptake.binary~chla+corrected.flow+light+added.NP+(1|treatment.year/stream),data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
 n.uptake.model<-summary(model)
 
 
 
 rsq.m<-r.squaredGLMM(model)[1,1]
+rsq.c<-r.squaredGLMM(model)[1,2]
 
 model.fit$chla.coef[i]<-n.uptake.model$coefficients[2,1]
 model.fit$flow.coef[i]<-n.uptake.model$coefficients[3,1]
@@ -203,12 +204,16 @@ model.fit$np.coef[i]<-n.uptake.model$coefficients[5,1]
 
 
 model.fit$r.squared.m[i]<-rsq.m
-#model.fit$r.squared.c[i]<-rsq.c
+model.fit$r.squared.c[i]<-rsq.c
 
 }
 
 mean(model.fit$r.squared.m)
 quantile(model.fit$r.squared.m,probs=c(0.025,0.975))
+
+mean(model.fit$r.squared.c)
+quantile(model.fit$r.squared.c,probs=c(0.025,0.975))
+
 
 mean(model.fit$chla.coef)
 quantile(model.fit$chla.coef,probs=c(0.025,0.975))
@@ -257,30 +262,41 @@ test<-data.frame(models=as.factor(best.model))
 summary(test)
 
 
-model.fit<-data.frame(chla.coef=rep(NA,1000),light.coef=rep(NA,1000),r.squared.m=rep(NA,1000))
+model.fit<-data.frame(chla.coef=rep(NA,1000),light.coef=rep(NA,1000),r.squared.m=rep(NA,1000),r.squared.c=rep(NA,1000))
 for (i in 1:1000){
   
-model<-glm(uptake.binary~chla+light,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+model<-glmer(uptake.binary~chla+light+(1|treatment.year/stream),data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
 n.uptake.model<-summary(model)
+
+
+
+rsq.m<-r.squaredGLMM(model)[1,1]
+rsq.c<-r.squaredGLMM(model)[1,2]
+
+
 
 coef<-n.uptake.model$coefficients[2,1]
 coef2<-n.uptake.model$coefficients[3,1]
 
 rsq.m<-r.squaredGLMM(model)[1,1]
-#rsq.c<-r.squaredGLMM(model)[1,2]
+rsq.c<-r.squaredGLMM(model)[1,2]
 
 model.fit$chla.coef[i]<-coef
 
 model.fit$r.squared.m[i]<-rsq.m
 
 model.fit$light.coef[i]<-coef2
-#model.fit$r.squared.c[i]<-rsq.c
+model.fit$r.squared.c[i]<-rsq.c
 
 }
 
 
 mean(model.fit$r.squared.m)
 quantile(model.fit$r.squared.m,probs=c(0.025,0.975))
+
+mean(model.fit$r.squared.c)
+quantile(model.fit$r.squared.c,probs=c(0.025,0.975))
+
 
 mean(model.fit$chla.coef)
 quantile(model.fit$chla.coef,probs=c(0.025,0.975))
@@ -324,7 +340,7 @@ best.model[i]<-knitr::combine_words(terms)}else(best.model[i]<-NA)
 test<-data.frame(models=as.factor(best.model))
 summary(test)
 
-model.fit<-data.frame(chla.coef=rep(NA,1000),flow.coef=rep(NA,1000),r.squared.m=rep(NA,1000))
+model.fit<-data.frame(chla.coef=rep(NA,1000),flow.coef=rep(NA,1000),r.squared.m=rep(NA,1000),r.squared.c=rep(NA,1000))
 for (i in 1:1000){
   
 model<-glm(uptake.binary~chla+corrected.flow+stream,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
@@ -334,18 +350,21 @@ coef<-n.uptake.model$coefficients[2,1]
 coef2<-n.uptake.model$coefficients[3,1]
 
 rsq.m<-r.squaredGLMM(model)[1,1]
-#rsq.c<-r.squaredGLMM(model)[1,2]
+rsq.c<-r.squaredGLMM(model)[1,2]
 
 model.fit$chla.coef[i]<-n.uptake.model$coefficients[2,1]
 model.fit$flow.coef[i]<-n.uptake.model$coefficients[3,1]
 model.fit$r.squared.m[i]<-rsq.m
-#model.fit$r.squared.c[i]<-rsq.c
+model.fit$r.squared.c[i]<-rsq.c
 
 }
 
 
 mean(model.fit$r.squared.m)
 quantile(model.fit$r.squared.m,probs=c(0.025,0.975))
+
+mean(model.fit$r.squared.c)
+quantile(model.fit$r.squared.c,probs=c(0.025,0.975))
 
 mean(model.fit$chla.coef)
 quantile(model.fit$chla.coef,probs=c(0.025,0.975))
@@ -387,24 +406,27 @@ test<-data.frame(models=as.factor(best.model))
 summary(test)
 
 
-model.fit<-data.frame(chla.coef=rep(NA,1000),flow.coef=rep(NA,1000),np.coef=rep(NA,1000),r.squared.m=rep(NA,1000))
+model.fit<-data.frame(chla.coef=rep(NA,1000),flow.coef=rep(NA,1000),np.coef=rep(NA,1000),r.squared.m=rep(NA,1000),r.squared.c=rep(NA,1000))
 for (i in 1:1000){
   
-model<-glm(uptake.binary~chla+corrected.flow+added.NP,data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
+model<-glmer(uptake.binary~chla+corrected.flow+added.NP+(1|treatment.year/stream),data=n2[n2$iteration==i,],na.action = na.fail,family=binomial)
 n.uptake.model<-summary(model)
 
 coef<-n.uptake.model$coefficients[2,1]
 
 rsq.m<-r.squaredGLMM(model)[1,1]
-#rsq.c<-r.squaredGLMM(model)[1,2]
+rsq.c<-r.squaredGLMM(model)[1,2]
 
 model.fit$chla.coef[i]<-n.uptake.model$coefficients[2,1]
 model.fit$flow.coef[i]<-n.uptake.model$coefficients[3,1]
 model.fit$np.coef[i]<-n.uptake.model$coefficients[4,1]
 
 model.fit$r.squared.m[i]<-rsq.m
-
+model.fit$r.squared.c[i]<-rsq.c
 }
+
+mean(model.fit$r.squared.c)
+quantile(model.fit$r.squared.c,probs=c(0.025,0.975))
 
 
 mean(model.fit$r.squared.m)
