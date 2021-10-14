@@ -1,0 +1,351 @@
+---
+title: "SNAX_regressions"
+author: "Nate"
+date: "January 6, 2021"
+output: html_document
+---
+This reads in raw data required to calculate fungal and algal biomass and interpolates estimates on all dates of the experiment. Then data are standardized and exported to a new file. 
+
+
+
+Load data and packages
+```{r}
+set.seed(207)
+
+#### load packages
+library(ggplot2)
+library(bbmle)
+library(Rmisc)
+library(reshape2)
+library(dplyr)
+
+### load data
+setwd("C:\\Users\\nt78066\\OneDrive - University of Georgia\\Documents\\SNAX_3_nutrient_uptake\\")
+
+uptake<-read.csv("Final_uptake_estiamtes.csv")
+
+uptake<-uptake[uptake$Meter==70,]
+
+#algae<-read.csv("algae.for.regression.csv" )
+algae_og<-read.csv("full_algae_data.csv")
+
+#fungi<-read.csv("Fungal.biomass.for.models.csv")
+
+ww<-read.csv("wood_wetted_widths.csv")
+di<-read.csv("wood_diamaters.csv")
+
+llss<-read.csv("leaf_litter_standing_stocks.csv")
+
+w.fungi<-read.csv("wood_fungal_biomass.csv")
+l.fungi<-read.csv("leaf_fungal_biomass2.csv")
+
+algae_og$date<-as.Date(strptime(algae_og$date,format=("%Y-%m-%d")))
+uptake$date<-as.Date(strptime(uptake$date,format=("%Y-%m-%d")))
+
+llss$date<-as.Date(strptime(llss$date,format=("%Y-%m-%d")))
+w.fungi$date<-as.Date(strptime(w.fungi$date,format=("%Y-%m-%d")))
+l.fungi$date<-as.Date(strptime(l.fungi$date,format=("%Y-%m-%d")))
+```
+
+
+#Algae first
+This code samples from the raw data and uses loess regressions to interpolate estimates to all dates
+```{r}
+
+
+set.seed(207)
+
+uptake$chla<-NA
+uptake$chla.delta<-NA
+
+for ( i in 1:1000){
+
+algae<-sample_n(algae_og,nrow(algae_og),replace=TRUE)
+
+
+algae_model6<-loess(chla.mg.m2~as.numeric(date),algae[algae$stream=="WS06",],span=0.25)
+algae_model7<-loess(chla.mg.m2~as.numeric(date),algae[algae$stream=="WS07",],span=0.25)
+algae_model8<-loess(chla.mg.m2~as.numeric(date),algae[algae$stream=="WS08",],span=0.25)
+algae_model9<-loess(chla.mg.m2~as.numeric(date),algae[algae$stream=="WS09",],span=0.25)
+algae_model10<-loess(chla.mg.m2~as.numeric(date),algae[algae$stream=="WS10",],span=0.25)
+
+
+uptake[uptake$stream=="WS06" & uptake$interation ==i,"chla"]<-predict(algae_model6,as.numeric(uptake[uptake$stream=="WS06" & uptake$interation ==i,"date"]))
+uptake[uptake$stream=="WS07" & uptake$interation ==i,"chla"]<-predict(algae_model7,as.numeric(uptake[uptake$stream=="WS07" & uptake$interation ==i,"date"]))
+uptake[uptake$stream=="WS08" & uptake$interation ==i,"chla"]<-predict(algae_model8,as.numeric(uptake[uptake$stream=="WS08" & uptake$interation ==i,"date"]))
+uptake[uptake$stream=="WS09" & uptake$interation ==i,"chla"]<-predict(algae_model9,as.numeric(uptake[uptake$stream=="WS09" & uptake$interation ==i,"date"]))
+uptake[uptake$stream=="WS10" & uptake$interation ==i,"chla"]<-predict(algae_model10,as.numeric(uptake[uptake$stream=="WS10" & uptake$interation ==i,"date"]))
+
+}
+
+```
+
+
+
+Same thing for fungi now. Need to estimates mass of leaves and wood in each stream, then multipy by the density of fungal biomass to get a total areal fungal biomass
+```{r}
+
+set.seed(207)
+meters<-seq(0,70,by=5)
+di<-di[complete.cases(di),]
+w.fungi<-w.fungi[complete.cases(w.fungi),]
+dates.fun<-levels(as.factor(w.fungi$date))
+
+dates.fun.l<-levels(as.factor(l.fungi$date))
+
+rm(mean)
+rm(sum)
+
+uptake$fungi<-NA
+
+uptake$fungi.leaves<-NA
+
+
+
+sp.grav<-0.439 # Valuce from Wallace et al  2001
+
+exponential.effect<-1.3839 #Value from data provided by V. gulis
+
+llss.dates<-levels(as.factor(llss$date))
+
+### The density of fungal biomass (ug FB/ g wood) is known to vary as a function of the diamater of wood. Generally larger sticks have a lower density of fungal biomass because of differnets in surface area/ volume. This equation uses data provded by V. gulis to adjust densities for the size of sticks. This is similar to what was done in Kominoski et al 2017 with these same data. 
+
+wood.FB.function<-function(biomass, diamaters,masses,meters){
+  
+### The overall equation to calculate the mass of wood is 
+### weight wood per m2= (pi^2 * sum(diamaters^2) * specific gravity of wood) / ( 8 * width of transect )
+### it is important to convert everthing to the same units. cm for the both the transect and
+### diamaters and the conversion is in g/cm3
+### papers to read on this method Wagner 1968, Walllace and Benke 1984 and Wallace et al 2001 for the
+### specific gravity calculation
+
+  
+  biomass[is.na(biomass)]<-9999999 ## loosing the NA - at somepoint in the calcs was causing issues - going to remove these later
+  
+  other.parm<-biomass/exp(exponential.effect*0.5) # 0.5 cm is vlads guess about what the average size of stick is that he measured
+  
+  
+  new<-data.frame(diamater.cm=rep(diamaters,times=length(other.parm)),mass=rep(masses,times=length(other.parm)),meter=rep(meters,times=length(other.parm)),other.parm=rep(other.parm,each=length(diamaters)))
+  new$adj.fb<-new$other.parm*exp(4/(new$diamater.cm*10)*1.3839)*new$mass
+  
+  new2<-aggregate(adj.fb~meter+other.parm,new,sum)
+  
+  mean.fb<-aggregate(adj.fb~other.parm,new2,mean)
+  
+  dumb<-data.frame(index=seq(1:length(other.parm)),other.parm=other.parm)
+  
+  dumb<-merge(dumb,mean.fb,by="other.parm")
+  dumb<-dumb[order(dumb$index),]
+  
+  dumb[dumb$adj.fb>271220500,"adj.fb"]<-NA ### changes NA observations (converted to 9999999 above) back to NA
+  return(dumb$adj.fb)
+}
+
+
+
+## sampling with replacement from raw data
+for (i in 1:1000){
+
+  diamater.s<-data.frame()
+  wood.fungi.s<-data.frame()
+  llss.sample<-data.frame()
+  l.fungi.sample<-data.frame()
+  
+  for (j in 1:5){
+    stream<-levels(di$stream)[j]
+    for (t in 1:15){
+      meter<-meters[t]
+      diamater.s<-rbind(diamater.s,data.frame(stream=stream,meter=meter,diamater.cm= sample(di[di$stream==stream & di$meter==meter,"diameters..cm."],replace=TRUE)))
+    }
+    
+  }
+
+  
+    for (j in 1:5){
+    stream<-levels(di$stream)[j]
+    for (t in 1:14){
+      date<-dates.fun[t]
+      try(wood.fungi.s<-rbind(wood.fungi.s,data.frame(stream=stream,date=date,fungal.biomass= sample(w.fungi[w.fungi$stream==stream & w.fungi$date==date,"Fungal.biomass.mg.g.afdm"],replace=TRUE))),silent=TRUE)
+    }
+    
+    }
+  
+  
+for (j in 1:5){
+  stream<-levels(llss$stream)[j]
+  for (t in 1:length(llss.dates)){
+    date<-llss.dates[t]
+    llss.sample<-rbind(llss.sample,data.frame(stream=stream,date=date,llss.afdm=sample(llss[llss$date==date & llss$stream==stream,"llss.afdm..g.m2."],replace=TRUE)))
+    
+    }
+}
+  
+  
+  for (j in 1:5){
+  stream<-levels(llss$stream)[j]
+  for (t in 1:length(dates.fun.l)){
+    date<-dates.fun.l[t]
+    l.fungi.sample<-rbind(l.fungi.sample,data.frame(stream=stream,date=date,fungal.biomass.l=sample(l.fungi[l.fungi$date==date & l.fungi$stream==stream,"Fungal.biomass..mg.g.AFDM"],replace=TRUE)))
+    
+    }
+  }
+  
+
+  diamater.s.2<-merge(diamater.s,ww,by=c("stream","meter"))
+  diamater.s.2$mass<-(pi**2)/(8*(diamater.s.2$Wetted.width..m.*100))*diamater.s.2$diamater.cm**2*sp.grav*(10000)
+  
+  wood.sample.mass<-aggregate(mass~stream+meter,diamater.s.2,sum)
+  wood.mean<-aggregate(mass~stream,wood.sample.mass,mean)
+
+#using loess models to interpolate data on biomass density for both wood and leaves
+  
+fungi_model6<-loess(fungal.biomass~as.numeric(as.Date(date)),wood.fungi.s[wood.fungi.s$stream=="WS06",],span=0.4)
+fungi_model7<-loess(fungal.biomass~as.numeric(as.Date(date)),wood.fungi.s[wood.fungi.s$stream=="WS07",],span=0.4)
+fungi_model8<-loess(fungal.biomass~as.numeric(as.Date(date)),wood.fungi.s[wood.fungi.s$stream=="WS08",],span=0.4)
+fungi_model9<-loess(fungal.biomass~as.numeric(as.Date(date)),wood.fungi.s[wood.fungi.s$stream=="WS09",],span=0.4)
+fungi_model10<-loess(fungal.biomass~as.numeric(as.Date(date)),wood.fungi.s[wood.fungi.s$stream=="WS10",],span=0.4)
+
+fungi_model6l<-loess(fungal.biomass.l~as.numeric(as.Date(date)),l.fungi.sample[l.fungi.sample$stream=="WS06",],span=0.4)
+fungi_model7l<-loess(fungal.biomass.l~as.numeric(as.Date(date)),l.fungi.sample[l.fungi.sample$stream=="WS07",],span=0.4)
+fungi_model8l<-loess(fungal.biomass.l~as.numeric(as.Date(date)),l.fungi.sample[l.fungi.sample$stream=="WS08",],span=0.4)
+fungi_model9l<-loess(fungal.biomass.l~as.numeric(as.Date(date)),l.fungi.sample[l.fungi.sample$stream=="WS09",],span=0.4)
+fungi_model10l<-loess(fungal.biomass.l~as.numeric(as.Date(date)),l.fungi.sample[l.fungi.sample$stream=="WS10",],span=0.4)
+
+#using loess models to interpolate data on leaf litter standing stocks
+
+l_model6<-loess(llss.afdm~as.numeric(as.Date(date)),llss.sample[llss.sample$stream=="WS06",],span=0.25)
+l_model7<-loess(llss.afdm~as.numeric(as.Date(date)),llss.sample[llss.sample$stream=="WS07",],span=0.25)
+l_model8<-loess(llss.afdm~as.numeric(as.Date(date)),llss.sample[llss.sample$stream=="WS08",],span=0.25)
+l_model9<-loess(llss.afdm~as.numeric(as.Date(date)),llss.sample[llss.sample$stream=="WS09",],span=0.25)
+l_model10<-loess(llss.afdm~as.numeric(as.Date(date)),llss.sample[llss.sample$stream=="WS10",],span=0.25)
+
+
+# Predicting values of fungal biomass associated with wood
+uptake[uptake$stream=="WS06" & uptake$interation==i,"fungi"]<-wood.FB.function(predict(fungi_model6,as.numeric(uptake[uptake$stream=="WS06" & uptake$interation==i,"date"])),diamater.s.2[diamater.s.2$stream=="WS06","diamater.cm"],diamater.s.2[diamater.s.2$stream=="WS06","mass"],diamater.s.2[diamater.s.2$stream=="WS06","meter"])
+
+uptake[uptake$stream=="WS07" & uptake$interation==i,"fungi"]<-wood.FB.function(predict(fungi_model7,as.numeric(uptake[uptake$stream=="WS07" & uptake$interation==i,"date"])),diamater.s.2[diamater.s.2$stream=="WS07","diamater.cm"],diamater.s.2[diamater.s.2$stream=="WS07","mass"],diamater.s.2[diamater.s.2$stream=="WS07","meter"])
+
+uptake[uptake$stream=="WS08" & uptake$interation==i,"fungi"]<-wood.FB.function(predict(fungi_model8,as.numeric(uptake[uptake$stream=="WS08" & uptake$interation==i,"date"])),diamater.s.2[diamater.s.2$stream=="WS08","diamater.cm"],diamater.s.2[diamater.s.2$stream=="WS08","mass"],diamater.s.2[diamater.s.2$stream=="WS08","meter"])
+
+uptake[uptake$stream=="WS09" & uptake$interation==i,"fungi"]<-wood.FB.function(predict(fungi_model9,as.numeric(uptake[uptake$stream=="WS09" & uptake$interation==i,"date"])),diamater.s.2[diamater.s.2$stream=="WS09","diamater.cm"],diamater.s.2[diamater.s.2$stream=="WS09","mass"],diamater.s.2[diamater.s.2$stream=="WS09","meter"])
+
+uptake[uptake$stream=="WS10" & uptake$interation==i,"fungi"]<-wood.FB.function(predict(fungi_model10,as.numeric(uptake[uptake$stream=="WS10" & uptake$interation==i,"date"])),diamater.s.2[diamater.s.2$stream=="WS10","diamater.cm"],diamater.s.2[diamater.s.2$stream=="WS10","mass"],diamater.s.2[diamater.s.2$stream=="WS10","meter"])
+
+
+## Then with leaves
+
+uptake[uptake$stream=="WS06" & uptake$interation==i,"fungi.leaves"]<-predict(l_model6,as.numeric(uptake[uptake$stream=="WS06" & uptake$interation==i,"date"]))*predict(fungi_model6l,as.numeric(uptake[uptake$stream=="WS06" & uptake$interation==i,"date"]))
+
+uptake[uptake$stream=="WS07" & uptake$interation==i,"fungi.leaves"]<-predict(l_model7,as.numeric(uptake[uptake$stream=="WS07" & uptake$interation==i,"date"]))*predict(fungi_model7l,as.numeric(uptake[uptake$stream=="WS07" & uptake$interation==i,"date"]))
+
+uptake[uptake$stream=="WS08" & uptake$interation==i,"fungi.leaves"]<-predict(l_model8,as.numeric(uptake[uptake$stream=="WS08" & uptake$interation==i,"date"]))*predict(fungi_model8l,as.numeric(uptake[uptake$stream=="WS08" & uptake$interation==i,"date"]))
+
+uptake[uptake$stream=="WS09" & uptake$interation==i,"fungi.leaves"]<-predict(l_model9,as.numeric(uptake[uptake$stream=="WS09" & uptake$interation==i,"date"]))*predict(fungi_model9l,as.numeric(uptake[uptake$stream=="WS09" & uptake$interation==i,"date"]))
+
+uptake[uptake$stream=="WS10" & uptake$interation==i,"fungi.leaves"]<-predict(l_model10,as.numeric(uptake[uptake$stream=="WS10" & uptake$interation==i,"date"]))*predict(fungi_model10l,as.numeric(uptake[uptake$stream=="WS10" & uptake$interation==i,"date"]))
+
+}
+
+
+
+uptake$total.fungi<-uptake$fungi+uptake$fungi.leaves
+
+
+    
+```
+
+
+# Standardizing variables
+
+```{r}
+d<-uptake
+library(lme4)
+library(lmerTest)
+library(MuMIn)
+library(MASS)
+
+
+Yeo.transform<-function(x){
+  if(is.na(x)==TRUE){t<-NA}
+  else{
+  try(if (x>0){t<-log(x+1)})
+  try(if (x<0){t<-(-log(-x+1))})
+  }
+  as.numeric(t)
+  }
+vector<-c()
+vector2<-c()
+
+for (i in 1:length(d$stream)){
+  vector[i]<-Yeo.transform(d$p.uptake.ug.m2.sec[i])
+  vector2[i]<-Yeo.transform(d$n.uptake.ug.m2.sec[i])
+}
+
+
+d[d$stream=="WS06","corrected.flow"]<-d[d$stream=="WS06","corrected.flow"]/max(d[d$stream=="WS06","corrected.flow"],na.rm=TRUE)
+d[d$stream=="WS07","corrected.flow"]<-d[d$stream=="WS07","corrected.flow"]/max(d[d$stream=="WS07","corrected.flow"],na.rm=TRUE)
+d[d$stream=="WS08","corrected.flow"]<-d[d$stream=="WS08","corrected.flow"]/max(d[d$stream=="WS08","corrected.flow"],na.rm=TRUE)
+d[d$stream=="WS09","corrected.flow"]<-d[d$stream=="WS09","corrected.flow"]/max(d[d$stream=="WS09","corrected.flow"],na.rm=TRUE)
+d[d$stream=="WS10","corrected.flow"]<-d[d$stream=="WS10","corrected.flow"]/max(d[d$stream=="WS10","corrected.flow"],na.rm=TRUE)
+
+d$added.NP<-(d$conservative_DIN/14)/(d$conservative_SRP/31)
+d$added.NP[which(!is.finite(d$added.NP))] <- NA
+
+d$total.fungi<-log(d$total.fungi)
+d$chla<-log(d$chla)
+d$corrected.flow<-log(d$corrected.flow)
+d$added.NP<-log(d$added.NP)
+d$average.water.etmp<-log(d$average.water.etmp)
+d$PAR_umol_s_m2_Avg<-log(d$PAR_umol_s_m2_Avg)
+
+
+d.standardized<-data.frame(stream=d$stream,date=d$date,meter=d$Meter,iteration=d$interation,p.uptake=vector,n.uptake=vector2,fungi=(d$total.fungi-mean(d$total.fungi,na.rm=TRUE))/sd(d$total.fungi,na.rm=TRUE),chla=(d$chla-mean(d$chla,na.rm=TRUE))/sd(d$chla,na.rm=TRUE),corrected.flow=(d$corrected.flow-mean(d$corrected.flow,na.rm=TRUE))/sd(d$corrected.flow,na.rm=TRUE),temp=(d$average.water.etmp-mean(d$average.water.etmp,na.rm=TRUE))/sd(d$average.water.etmp,na.rm=TRUE),light=(d$PAR_umol_s_m2_Avg-mean(d$PAR_umol_s_m2_Avg,na.rm=TRUE))/sd(d$PAR_umol_s_m2_Avg,na.rm=TRUE),added.NP=(d$added.NP-mean(d$added.NP,na.rm=TRUE))/sd(d$added.NP,na.rm=TRUE),DIN=(d$conservative_DIN-mean(d$conservative_DIN,na.rm=TRUE))/sd(d$conservative_DIN,na.rm=TRUE),SRP=(d$conservative_SRP-mean(d$conservative_SRP,na.rm=TRUE))/sd(d$conservative_SRP,na.rm=TRUE))
+
+
+
+write.csv(d.standardized,file="standardized_model_data.csv")
+write.csv(d,file="unstandardized_model_data.csv")
+
+```
+# check standardized coefficients for colinearity
+
+
+```{r}
+
+cp<-data.frame(fb.chla=rep(NA,times=1000),fb.q=rep(NA,times=1000),fb.temp=rep(NA,times=1000),fb.light=rep(NA,times=1000),chla.q=rep(NA,times=1000),chla.temp=rep(NA,times=1000),chla.light=rep(NA,times=1000),q.temp=rep(NA,times=1000),q.light=rep(NA,times=1000),temp.light=rep(NA,times=1000),fb.np=rep(NA,times=1000),chla.np=rep(NA,times=1000),q.np=rep(NA,times=1000),temp.np=rep(NA,times=1000),light.np=rep(NA,times=1000))
+
+for (i in 1:1000){
+  batch<-d.standardized[d.standardized$iteration==i,]
+  
+  cp$fb.chla[i]<-cor(batch$fungi,batch$chla,use="complete.obs")
+   cp$fb.q[i]<-cor(batch$fungi,batch$corrected.flow,use="complete.obs")
+  cp$fb.temp[i]<-cor(batch$fungi,batch$temp,use="complete.obs")
+  cp$fb.light[i]<-cor(batch$fungi,batch$light,use="complete.obs")
+  cp$chla.q[i]<-cor(batch$chla,batch$corrected.flow,use="complete.obs")
+  cp$chla.temp[i]<-cor(batch$chla,batch$temp,use="complete.obs")
+  cp$chla.light[i]<-cor(batch$light,batch$chla,use="complete.obs")
+  cp$q.light[i]<-cor(batch$corrected.flow,batch$light,use="complete.obs")
+  cp$temp.light[i]<-cor(batch$temp,batch$light,use="complete.obs")
+
+  cp$fb.np[i]<-cor(batch$fungi,batch$added.NP,use="complete.obs")
+
+  cp$chla.np[i]<-cor(batch$chla,batch$added.NP,use="complete.obs")
+
+  cp$q.temp<-cor(batch$corrected.flow,batch$temp,use="complete.obs")
+
+
+  cp$q.np[i]<-cor(batch$corrected.flow,batch$added.NP,use="complete.obs")
+
+  cp$temp.np[i]<-cor(batch$temp,batch$added.NP,use="complete.obs")
+
+
+  cp$light.np[i]<-cor(batch$light,batch$added.NP,use="complete.obs")
+
+  
+  
+  
+}
+summary(cp) # mean values used in table A1
+
+```
+
