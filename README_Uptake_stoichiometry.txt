@@ -68,6 +68,7 @@ P_uptake_status.csv
 Final_uptake_estiamtes.csv
 standarized_model_data.csv
 unstandardized_model_data.csv
+all.salt.slugs.csv
 
 Uptake_stoichiometry_estimates_figures_2021.Rmd
 stoichiometry_uptake_model_selection.Rmd
@@ -450,6 +451,22 @@ n.uptake.ug.m2.sec - the uptake rate of DIN in the units of ug N per meter squar
 n.uptake.uM.m2.sec - the uptake rate of DIN in the units of uM N per meter squared per second
 p.uptake.uM.m2.sec - the uptake rate of SRP in the units of uM P per meter squared per second
 
+
+4. Missing data codes: 
+NA
+5. Specialized formats or other abbreviations used: 
+NA
+
+DATA-SPECIFIC INFORMATION FOR: all.salt.slugs.csv
+
+1. Number of variables: 3
+
+2. Number of cases/rows: 130
+
+3. Variable List: 
+stream - stream identification (WS06, WS07, WS08, WS09, WS10)
+Date- date  in YYYY-MM-DD format
+Measured Q (Ls-1) - the discharge measured by the salt slug
 
 4. Missing data codes: 
 NA
